@@ -167,6 +167,55 @@ test('should reject send() after transport is closed', async () => {
     await expect(server.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).rejects.toThrow('closed');
 });
 
+test('should send Invalid Request for malformed request frames with an id', async () => {
+    const server = new StdioServerTransport(input, output);
+
+    let receivedError: Error | undefined;
+    let didRead = false;
+    server.onerror = error => {
+        receivedError = error;
+    };
+    server.onmessage = () => {
+        didRead = true;
+    };
+
+    await server.start();
+    input.push('{"id":99,"method":"ping"}\n');
+
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(didRead).toBe(false);
+    expect(receivedError?.message).toBe('Failed to parse JSON-RPC message');
+    expect(outputBuffer.readMessage()).toEqual({
+        jsonrpc: '2.0',
+        id: 99,
+        error: {
+            code: -32600,
+            message: 'Invalid Request'
+        }
+    });
+});
+
+test('should send Invalid Request without an id for invalid batch frames', async () => {
+    const server = new StdioServerTransport(input, output);
+    server.onerror = () => {};
+
+    await server.start();
+    input.push('[{"jsonrpc":"2.0","id":100,"method":"ping"}]\n');
+
+    await new Promise(resolve => setImmediate(resolve));
+
+    const message = outputBuffer.readMessage();
+    expect(message).toEqual({
+        jsonrpc: '2.0',
+        error: {
+            code: -32600,
+            message: 'Invalid Request'
+        }
+    });
+    expect(message && 'id' in message).toBe(false);
+});
+
 test('should fire onerror before onclose on stdout error', async () => {
     const server = new StdioServerTransport(input, output);
 

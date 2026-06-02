@@ -1,7 +1,7 @@
 import type { Readable, Writable } from 'node:stream';
 
-import type { JSONRPCMessage, Transport } from '@modelcontextprotocol/core';
-import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/core';
+import type { JSONRPCMessage, RequestId, Transport } from '@modelcontextprotocol/core';
+import { INVALID_REQUEST, JSONRPC_VERSION, MessageParseError, ReadBuffer, serializeMessage } from '@modelcontextprotocol/core';
 import { process } from '@modelcontextprotocol/server/_shims';
 
 /**
@@ -72,8 +72,24 @@ export class StdioServerTransport implements Transport {
                 this.onmessage?.(message);
             } catch (error) {
                 this.onerror?.(error as Error);
+                if (error instanceof MessageParseError) {
+                    this.sendInvalidRequestError(error.line);
+                }
             }
         }
+    }
+
+    private sendInvalidRequestError(line: string) {
+        const id = extractRequestId(line);
+        const error = {
+            code: INVALID_REQUEST,
+            message: 'Invalid Request'
+        };
+        const response: JSONRPCMessage = id === undefined ? { jsonrpc: JSONRPC_VERSION, error } : { jsonrpc: JSONRPC_VERSION, id, error };
+
+        void this.send(response).catch(error => {
+            this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        });
     }
 
     async close(): Promise<void> {
@@ -135,4 +151,26 @@ export class StdioServerTransport implements Transport {
             }
         });
     }
+}
+
+function extractRequestId(line: string): RequestId | undefined {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(line);
+    } catch {
+        return undefined;
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return undefined;
+    }
+
+    const id = (parsed as { id?: unknown }).id;
+    if (typeof id === 'string') {
+        return id;
+    }
+    if (typeof id === 'number' && Number.isInteger(id)) {
+        return id;
+    }
+    return undefined;
 }

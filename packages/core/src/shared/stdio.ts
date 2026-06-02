@@ -1,6 +1,19 @@
 import type { JSONRPCMessage } from '../types/index.js';
 import { JSONRPCMessageSchema } from '../types/index.js';
 
+export class MessageParseError extends Error {
+    readonly parseError: unknown;
+
+    constructor(
+        readonly line: string,
+        parseError: unknown
+    ) {
+        super('Failed to parse JSON-RPC message');
+        this.name = 'MessageParseError';
+        this.parseError = parseError;
+    }
+}
+
 /**
  * Buffers a continuous stdio stream into discrete JSON-RPC messages.
  */
@@ -30,7 +43,7 @@ export class ReadBuffer {
                 if (error instanceof SyntaxError) {
                     continue;
                 }
-                throw error;
+                throw new MessageParseError(line, error);
             }
         }
         return null;

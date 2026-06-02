@@ -1,4 +1,4 @@
-import { ReadBuffer } from '../../src/shared/stdio.js';
+import { MessageParseError, ReadBuffer } from '../../src/shared/stdio.js';
 import type { JSONRPCMessage } from '../../src/types/index.js';
 
 const testMessage: JSONRPCMessage = {
@@ -108,8 +108,16 @@ describe('non-JSON line filtering', () => {
 
     test('should still throw on valid JSON that fails schema validation', () => {
         const readBuffer = new ReadBuffer();
-        readBuffer.append(Buffer.from('{"not": "a jsonrpc message"}\n'));
+        const line = '{"not": "a jsonrpc message"}';
+        readBuffer.append(Buffer.from(line + '\n'));
 
-        expect(() => readBuffer.readMessage()).toThrow();
+        try {
+            readBuffer.readMessage();
+            throw new Error('Expected readMessage to throw');
+        } catch (error) {
+            expect(error).toBeInstanceOf(MessageParseError);
+            expect((error as MessageParseError).message).toBe('Failed to parse JSON-RPC message');
+            expect((error as MessageParseError).line).toBe(line);
+        }
     });
 });
