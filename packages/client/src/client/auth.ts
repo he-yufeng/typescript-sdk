@@ -761,8 +761,8 @@ async function authInternal(
 
     const tokens = await provider.tokens();
 
-    // Handle token refresh or new authorization
-    if (tokens?.refresh_token) {
+    // Step-up scopes need fresh user consent; a refresh grant can only reuse existing consent.
+    if (tokens?.refresh_token && scope === undefined) {
         try {
             // Attempt to refresh the token
             const newTokens = await refreshAuthorization(authorizationServerUrl, {
