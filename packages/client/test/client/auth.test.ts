@@ -2591,6 +2591,66 @@ describe('OAuth Authorization', () => {
             expect(body.get('refresh_token')).toBe('refresh123');
         });
 
+        it('redirects explicit step-up scope requests even with a refresh token', async () => {
+            mockFetch.mockImplementation(url => {
+                const urlString = url.toString();
+
+                if (urlString.includes('/.well-known/oauth-protected-resource')) {
+                    return Promise.resolve({
+                        ok: true,
+                        status: 200,
+                        json: async () => ({
+                            resource: 'https://api.example.com/mcp-server',
+                            authorization_servers: ['https://auth.example.com']
+                        })
+                    });
+                } else if (urlString.includes('/.well-known/oauth-authorization-server')) {
+                    return Promise.resolve({
+                        ok: true,
+                        status: 200,
+                        json: async () => ({
+                            issuer: 'https://auth.example.com',
+                            authorization_endpoint: 'https://auth.example.com/authorize',
+                            token_endpoint: 'https://auth.example.com/token',
+                            response_types_supported: ['code'],
+                            code_challenge_methods_supported: ['S256']
+                        })
+                    });
+                } else if (urlString.includes('/token')) {
+                    throw new Error('step-up authorization should not refresh the old token');
+                }
+
+                return Promise.resolve({ ok: false, status: 404 });
+            });
+
+            (mockProvider.clientInformation as Mock).mockResolvedValue({
+                client_id: 'test-client',
+                client_secret: 'test-secret'
+            });
+            (mockProvider.tokens as Mock).mockResolvedValue({
+                access_token: 'old-access',
+                refresh_token: 'refresh123'
+            });
+            (mockProvider.saveCodeVerifier as Mock).mockResolvedValue(undefined);
+            (mockProvider.redirectToAuthorization as Mock).mockResolvedValue(undefined);
+
+            const result = await auth(mockProvider, {
+                serverUrl: 'https://api.example.com/mcp-server',
+                scope: 'resource:tools:custom_scope'
+            });
+
+            expect(result).toBe('REDIRECT');
+            expect(mockProvider.saveTokens).not.toHaveBeenCalled();
+
+            const tokenCall = mockFetch.mock.calls.find(call => call[0].toString().includes('/token'));
+            expect(tokenCall).toBeUndefined();
+
+            const redirectCall = (mockProvider.redirectToAuthorization as Mock).mock.calls[0]!;
+            const authUrl: URL = redirectCall[0];
+            expect(authUrl.searchParams.get('scope')).toBe('resource:tools:custom_scope');
+            expect(authUrl.searchParams.get('resource')).toBe('https://api.example.com/mcp-server');
+        });
+
         it('skips default PRM resource validation when custom validateResourceURL is provided', async () => {
             const mockValidateResourceURL = vi.fn().mockResolvedValue(undefined);
             const providerWithCustomValidation = {

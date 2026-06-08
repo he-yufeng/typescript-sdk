@@ -762,7 +762,7 @@ async function authInternal(
     const tokens = await provider.tokens();
 
     // Handle token refresh or new authorization
-    if (tokens?.refresh_token) {
+    if (tokens?.refresh_token && scope === undefined) {
         try {
             // Attempt to refresh the token
             const newTokens = await refreshAuthorization(authorizationServerUrl, {
