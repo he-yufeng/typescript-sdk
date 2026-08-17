@@ -48,8 +48,9 @@ function modernToolsCall(name: string, args: Record<string, unknown>, envelope: 
 function bodyDerivedStandardHeaders(body: unknown): Record<string, string> {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) return {};
     const b = body as { method?: unknown; params?: { name?: unknown; uri?: unknown; _meta?: Record<string, unknown> } };
-    if (typeof b.params?._meta?.[PROTOCOL_VERSION_META_KEY] !== 'string') return {};
-    const out: Record<string, string> = {};
+    const claimedVersion = b.params?._meta?.[PROTOCOL_VERSION_META_KEY];
+    if (b.params === undefined || typeof claimedVersion !== 'string') return {};
+    const out: Record<string, string> = { 'mcp-protocol-version': claimedVersion };
     if (typeof b.method === 'string') out['mcp-method'] = b.method;
     const name = b.method === 'resources/read' ? b.params.uri : b.params.name;
     if (typeof name === 'string') out['mcp-name'] = name;
@@ -820,3 +821,57 @@ describe('createMcpHandler — close()', () => {
 // Type-level pin: a zero-argument factory stays assignable to McpServerFactory unchanged.
 const zeroArgFactory = () => new McpServer({ name: 'zero-arg', version: '1.0.0' });
 void createMcpHandler(zeroArgFactory);
+
+describe('createMcpHandler — keepAliveMs', () => {
+    function gatedFactory(): { factory: () => McpServer; release: () => void } {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const factory = (): McpServer => {
+            const s = new McpServer({ name: 'ka', version: '1.0.0' });
+            s.registerTool('gated', { inputSchema: z.object({}) }, async () => {
+                await gate;
+                return { content: [{ type: 'text', text: 'done' }] };
+            });
+            return s;
+        };
+        return { factory, release };
+    }
+
+    it('threads keepAliveMs into the modern per-request exchange stream', async () => {
+        vi.useFakeTimers();
+        try {
+            const { factory, release } = gatedFactory();
+            const handler = createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: 1_000 });
+            const responsePromise = handler.fetch(postRequest(modernToolsCall('gated', {})));
+            await vi.advanceTimersByTimeAsync(1_000);
+            release();
+            const response = await responsePromise;
+            expect(response.headers.get('content-type')).toContain('text/event-stream');
+            const text = await response.text();
+            expect(text).toContain(': keepalive');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('threads keepAliveMs into the legacy stateless fallback per-request transport', async () => {
+        vi.useFakeTimers();
+        try {
+            const { factory, release } = gatedFactory();
+            const handler = createMcpHandler(factory, { keepAliveMs: 1_000 });
+            const responsePromise = handler.fetch(
+                postRequest({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'gated', arguments: {} } })
+            );
+            await vi.advanceTimersByTimeAsync(1_000);
+            release();
+            const response = await responsePromise;
+            expect(response.headers.get('content-type')).toContain('text/event-stream');
+            const text = await response.text();
+            expect(text).toContain(': keepalive');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
